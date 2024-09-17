@@ -4,11 +4,11 @@ import java.util.Queue;
 import java.util.LinkedList;
 
 public class MovementDetector {
-    private static final float MOVEMENT_THRESHOLD = 0.8f; // m/s^2
+    private static final float MOVEMENT_THRESHOLD = 1.0f; // m/s^2
     private static final long WINDOW_SIZE_MS = 200;
     private static final float GRAVITY = 9.81f; // m/s^2
     private boolean isMoving = false;
-    private Queue<AccelData> accelDataWindow = new LinkedList<>();
+    private final Queue<AccelData> accelDataWindow = new LinkedList<>();
 
     private static class AccelData {
         long timestamp;
