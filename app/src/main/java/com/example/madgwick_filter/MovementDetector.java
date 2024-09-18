@@ -1,50 +1,66 @@
 package com.example.madgwick_filter;
 
-import java.util.Queue;
+import android.util.Log;
 import java.util.LinkedList;
+import java.util.Queue;
 
 public class MovementDetector {
-    private static final float MOVEMENT_THRESHOLD = 1.0f; // m/s^2
-    private static final long WINDOW_SIZE_MS = 200;
-    private static final float GRAVITY = 9.81f; // m/s^2
+    private static final String TAG = "MovementDetector";
+    private static final int WINDOW_SIZE = 5; // 0.05秒 * 100Hz
+    private static final float STD_DEV_THRESHOLD = 0.05f;
+    private static final float MEAN_THRESHOLD = 0.08f;
+    private static final int STATIC_COUNT_THRESHOLD = 5; // 即座に静止状態を検出
+
+    private Queue<Float> magnitudeWindow = new LinkedList<>();
     private boolean isMoving = false;
-    private final Queue<AccelData> accelDataWindow = new LinkedList<>();
+    private int staticCount = 0;
 
-    private static class AccelData {
-        long timestamp;
-        float[] values;
+    public boolean update(float[] worldAccel) {
+        float magnitude = (float) Math.sqrt(
+                worldAccel[0] * worldAccel[0] +
+                        worldAccel[1] * worldAccel[1] +
+                        worldAccel[2] * worldAccel[2]
+        );
 
-        AccelData(long timestamp, float[] values) {
-            this.timestamp = timestamp;
-            this.values = values;
-        }
-    }
-
-    public void update(long timestamp, float[] accelData) {
-        accelDataWindow.offer(new AccelData(timestamp, accelData.clone()));
-
-        while (!accelDataWindow.isEmpty() &&
-                timestamp - accelDataWindow.peek().timestamp > WINDOW_SIZE_MS * 1000000) {
-            accelDataWindow.poll();
+        magnitudeWindow.offer(magnitude);
+        if (magnitudeWindow.size() > WINDOW_SIZE) {
+            magnitudeWindow.poll();
         }
 
-        if (accelDataWindow.size() < 2) {
-            isMoving = false;
-            return;
+        if (magnitudeWindow.size() == WINDOW_SIZE) {
+            float sum = 0;
+            float squareSum = 0;
+
+            for (float mag : magnitudeWindow) {
+                sum += mag;
+                squareSum += mag * mag;
+            }
+
+            float mean = sum / WINDOW_SIZE;
+            float variance = (squareSum / WINDOW_SIZE) - (mean * mean);
+            float stdDev = (float) Math.sqrt(variance);
+
+            boolean previousState = isMoving;
+
+            if (stdDev > STD_DEV_THRESHOLD || mean > MEAN_THRESHOLD) {
+                isMoving = true;
+                staticCount = 0;
+            } else {
+                staticCount++;
+                if (staticCount >= STATIC_COUNT_THRESHOLD) {
+                    isMoving = false;
+                }
+            }
+
+            Log.d(TAG, String.format("Mean: %.4f, StdDev: %.4f, StaticCount: %d, IsMoving: %b",
+                    mean, stdDev, staticCount, isMoving));
+
+            if (isMoving != previousState) {
+                Log.d(TAG, "Movement state changed: " + (isMoving ? "Moving" : "Static"));
+            }
         }
 
-        float totalMagnitude = 0;
-        for (AccelData data : accelDataWindow) {
-            float magnitude = (float) Math.sqrt(
-                    Math.pow(data.values[0], 2) +
-                            Math.pow(data.values[1], 2) +
-                            Math.pow(data.values[2] - GRAVITY, 2)
-            );
-            totalMagnitude += magnitude;
-        }
-
-        float averageMagnitude = totalMagnitude / accelDataWindow.size();
-        isMoving = averageMagnitude > MOVEMENT_THRESHOLD;
+        return isMoving;
     }
 
     public boolean isMoving() {
@@ -52,7 +68,9 @@ public class MovementDetector {
     }
 
     public void reset() {
+        magnitudeWindow.clear();
         isMoving = false;
-        accelDataWindow.clear();
+        staticCount = 0;
+        Log.d(TAG, "MovementDetector reset");
     }
 }

@@ -40,6 +40,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private DistanceCalculator distanceCalculator;
     private FileWriter csvWriter;
     private static final long SAMPLING_PERIOD_US = 100000; // 100ms = 10Hz
+    private static final float SAMPLING_FREQUENCY = 10f; // Hz
     private static final long CSV_WRITE_INTERVAL_NS = 200000000; // 200ms
     private static final long MOVEMENT_DETECTION_INTERVAL_NS = 200000000; // 200ms
     private long lastMovementDetectionTime = 0;
@@ -125,13 +126,16 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             createCsvFile();
             isRunning = true;
             startTime = System.nanoTime();
+            distanceCalculator.resetDistance(); // 距離を0にリセット
+            startSensorListening();
+            updateUI(new float[4], new float[3], "静止", 0); // UIも0に更新
             Toast.makeText(this, "測定開始", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void stopMeasurement() {
         if (isRunning) {
-            sensorManager.unregisterListener(this);
+            stopSensorListening();
             closeCsvFile();
             isRunning = false;
             Toast.makeText(this, "測定終了", Toast.LENGTH_SHORT).show();
@@ -139,10 +143,12 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     private void resetMeasurement() {
+        stopMeasurement();
         madgwickFilter.reset();
         movementDetector.reset();
         distanceCalculator.reset();
         updateUI(new float[4], new float[3], "静止", 0);
+        Toast.makeText(this, "リセット完了", Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -163,26 +169,24 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
             if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
                 System.arraycopy(event.values, 0, lastAcceleration, 0, 3);
-                madgwickFilter.updateAccel(event.values);
-                movementDetector.update(currentTime, event.values);
             } else if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
                 System.arraycopy(event.values, 0, lastGyroscope, 0, 3);
-                madgwickFilter.updateGyro(event.values);
             }
 
-            madgwickFilter.update();
+            madgwickFilter.update(lastAcceleration, lastGyroscope, SAMPLING_FREQUENCY);
             float[] quaternion = madgwickFilter.getQuaternion();
-            float[] adjustedWorldAccel = madgwickFilter.getAdjustedWorldAcceleration();
-            boolean isMoving = movementDetector.isMoving();
+            float[] adjustedWorldAccel = madgwickFilter.getWorldAcceleration();
+
+            boolean isMoving = movementDetector.update(adjustedWorldAccel);
             String state = isMoving ? "歩行" : "静止";
 
             // デバッグログ
             Log.d(TAG, String.format("Adjusted World Accel: %.2f, %.2f, %.2f, Moving: %b",
                     adjustedWorldAccel[0], adjustedWorldAccel[1], adjustedWorldAccel[2], isMoving));
 
-            float[] motionData = distanceCalculator.calculateMotion(adjustedWorldAccel, isMoving);
+            float[] motionData = distanceCalculator.calculateMotion(adjustedWorldAccel, isMoving, event.timestamp);
 
-            updateUI(quaternion, adjustedWorldAccel, state, motionData[6]); // motionData[6] は totalDistance
+            updateUI(quaternion, adjustedWorldAccel, state, motionData[6]);
 
             if (isRunning && currentTime - lastCsvWriteTime >= CSV_WRITE_INTERVAL_NS) {
                 writeToCsv(elapsedTime, lastAcceleration, lastGyroscope, quaternion, adjustedWorldAccel, state, motionData);
@@ -200,11 +204,11 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private void updateUI(float[] quaternion, float[] adjustedWorldAccel, String state, float distance) {
         runOnUiThread(() -> {
             tvQuaternion.setText(String.format(Locale.getDefault(),
-                    "Quaternion: %.2f, %.2f, %.2f, %.2f", quaternion[0], quaternion[1], quaternion[2], quaternion[3]));
+                    "%.2f, %.2f, %.2f, %.2f", quaternion[0], quaternion[1], quaternion[2], quaternion[3]));
             tvAcceleration.setText(String.format(Locale.getDefault(),
-                    "Acceleration: X=%.2f, Y=%.2f, Z=%.2f", adjustedWorldAccel[0], adjustedWorldAccel[1], adjustedWorldAccel[2]));
-            tvState.setText("State: " + state);
-            tvDistance.setText(String.format(Locale.getDefault(), "Distance: %.2f m", distance));
+                    "X=%.2f, Y=%.2f, Z=%.2f", adjustedWorldAccel[0], adjustedWorldAccel[1], adjustedWorldAccel[2]));
+            tvState.setText(state);
+            tvDistance.setText(String.format(Locale.getDefault(), "%.2f m", distance));
         });
     }
 
@@ -248,13 +252,13 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 sb.append(wa).append(",");
             }
 
-            // 速度
+            // 速度 (3D)
             sb.append(motionData[0]).append(",").append(motionData[1]).append(",").append(motionData[2]).append(",");
 
-            // 位置
+            // 位置 (3D)
             sb.append(motionData[3]).append(",").append(motionData[4]).append(",").append(motionData[5]).append(",");
 
-            // 総移動距離
+            // 総移動距離 (2D: x-y平面上)
             sb.append(motionData[6]);
 
             sb.append("\n");
@@ -295,18 +299,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     @Override
-    protected void onPause() {
-        super.onPause();
-        stopSensorListening();
+    protected void onResume() {
+        super.onResume();
         if (isRunning) {
-            stopMeasurement();
+            startSensorListening();
         }
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        startSensorListening();
+    protected void onPause() {
+        super.onPause();
+        stopSensorListening();
     }
 
     @Override
