@@ -1,61 +1,68 @@
 package com.example.madgwick_filter;
 
-public class DistanceCalculator {
-    private static final float ACCELERATION_THRESHOLD = 0.05f; // m/s^2
-    private static final float VELOCITY_THRESHOLD = 0.01f; // m/s
-    private static final float ALPHA = 0.8f; // ローパスフィルタの係数
+import android.util.Log;
 
-    private float[] lastMotionData = new float[7];
-    private float[] lastAccel = new float[3];
+public class DistanceCalculator {
+    private static final String TAG = "DistanceCalculator";
+    private static final float ACCELERATION_THRESHOLD = 0.05f; // m/s^2
+    private static final float VELOCITY_THRESHOLD = 0.03f; // m/s
+    private static final float VELOCITY_DECAY_FACTOR = 0.9f; // 速度の減衰係数
+
     private float[] velocity = new float[3];
     private float[] position = new float[3];
     private float totalDistance = 0;
     private long lastUpdateTime = 0;
+    private boolean isInitialized = false;
 
-    public float[] calculateMotion(float[] worldAccel, boolean isMoving) {
-        long currentTime = System.nanoTime();
-
-        if (lastUpdateTime == 0) {
-            lastUpdateTime = currentTime;
-            System.arraycopy(worldAccel, 0, lastAccel, 0, 3);
+    public float[] calculateMotion(float[] worldAccel, boolean isMoving, long timestamp) {
+        if (!isInitialized) {
+            lastUpdateTime = timestamp;
+            isInitialized = true;
             return new float[]{0, 0, 0, 0, 0, 0, 0};
         }
 
-        float dt = (currentTime - lastUpdateTime) / 1e9f; // ナノ秒を秒に変換
-        lastUpdateTime = currentTime;
+        float dt = (timestamp - lastUpdateTime) / 1e9f; // ナノ秒を秒に変換
+        lastUpdateTime = timestamp;
 
         float[] newVelocity = new float[3];
         float[] newPosition = new float[3];
         float distanceIncrement = 0;
 
         if (isMoving) {
-            for (int i = 0; i < 3; i++) {
-                // ローパスフィルタを適用
-                float filteredAccel = ALPHA * lastAccel[i] + (1 - ALPHA) * worldAccel[i];
-
+            for (int i = 0; i < 2; i++) { // x-y平面のみを考慮
                 // ノイズ除去のための閾値処理
-                float acceleration = Math.abs(filteredAccel) > ACCELERATION_THRESHOLD ? filteredAccel : 0;
+                float acceleration = Math.abs(worldAccel[i]) > ACCELERATION_THRESHOLD ? worldAccel[i] : 0;
 
-                // 台形法による速度の積分
-                newVelocity[i] = velocity[i] + (acceleration + lastAccel[i]) / 2 * dt;
+                // 速度の計算
+                newVelocity[i] = velocity[i] + acceleration * dt;
+
+                // 速度の減衰
+                newVelocity[i] *= VELOCITY_DECAY_FACTOR;
 
                 // 速度の閾値処理
                 newVelocity[i] = Math.abs(newVelocity[i]) > VELOCITY_THRESHOLD ? newVelocity[i] : 0;
 
-                // 速度による位置の計算
-                newPosition[i] = position[i] + (velocity[i] + newVelocity[i]) / 2 * dt;
-
-                // 距離の増分を計算
-                distanceIncrement += Math.abs(newPosition[i] - position[i]);
-
-                // 更新された加速度を保存
-                lastAccel[i] = filteredAccel;
+                // 位置の計算
+                newPosition[i] = position[i] + newVelocity[i] * dt;
             }
+
+            // z軸の処理（高さ方向は距離計算に含めない）
+            newVelocity[2] = 0;
+            newPosition[2] = position[2];
+
+            // 2次元平面上（x-y平面）での移動距離を計算
+            float dx = newPosition[0] - position[0];
+            float dy = newPosition[1] - position[1];
+            distanceIncrement = (float) Math.sqrt(dx * dx + dy * dy);
         } else {
-            // 静止中は速度をゼロにリセット
-            newVelocity = new float[]{0, 0, 0};
+            // 静止中は速度を徐々に減衰
+            for (int i = 0; i < 3; i++) {
+                newVelocity[i] = velocity[i] * VELOCITY_DECAY_FACTOR;
+                if (Math.abs(newVelocity[i]) < VELOCITY_THRESHOLD) {
+                    newVelocity[i] = 0;
+                }
+            }
             newPosition = position.clone();
-            System.arraycopy(worldAccel, 0, lastAccel, 0, 3);
         }
 
         // 状態を更新
@@ -63,28 +70,29 @@ public class DistanceCalculator {
         position = newPosition;
         totalDistance += distanceIncrement;
 
+        Log.d(TAG, String.format("2D Distance: %.4f, Velocity: [%.2f, %.2f, %.2f]",
+                totalDistance, velocity[0], velocity[1], velocity[2]));
+
         // 結果を返す: [vx, vy, vz, px, py, pz, totalDistance]
-        lastMotionData[0] = velocity[0];
-        lastMotionData[1] = velocity[1];
-        lastMotionData[2] = velocity[2];
-        lastMotionData[3] = position[0];
-        lastMotionData[4] = position[1];
-        lastMotionData[5] = position[2];
-        lastMotionData[6] = totalDistance;
-
-        return lastMotionData;
+        return new float[]{
+                velocity[0], velocity[1], velocity[2],
+                position[0], position[1], position[2],
+                totalDistance
+        };
     }
 
-    public float[] getLastMotionData() {
-        return lastMotionData;
-    }
 
     public void reset() {
-        lastAccel = new float[3];
         velocity = new float[3];
         position = new float[3];
         totalDistance = 0;
         lastUpdateTime = 0;
-        lastMotionData = new float[7];
+        isInitialized = false;
+        Log.d(TAG, "DistanceCalculator reset");
+    }
+
+    public void resetDistance() {
+        totalDistance = 0;
+        Log.d(TAG, "Distance reset to 0");
     }
 }
