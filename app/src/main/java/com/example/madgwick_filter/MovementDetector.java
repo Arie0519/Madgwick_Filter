@@ -7,8 +7,8 @@ import java.util.Queue;
 public class MovementDetector {
     private static final String TAG = "MovementDetector";
     private static final int WINDOW_SIZE = 5; // 0.05秒 * 100Hz
-    private static final float STD_DEV_THRESHOLD = 0.05f;
-    private static final float MEAN_THRESHOLD = 0.08f;
+    private static final float STD_DEV_THRESHOLD = 0.2f;
+    private static final float MEAN_THRESHOLD = 0.2f;
     private static final int STATIC_COUNT_THRESHOLD = 5; // 即座に静止状態を検出
 
     private Queue<Float> magnitudeWindow = new LinkedList<>();
